@@ -4,6 +4,7 @@ discussion: https://github.com/praxis-proxy/ai/issues/121
 status: proposed
 authors:
   - shaneutt
+  - jland-redhat
 graduation_criteria:
   - How? section with requirements and design
 stakeholders:
