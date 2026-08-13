@@ -56,7 +56,7 @@ estimation, what to do with unused tokens, etc.
   while reserving an estimated token cost, then
   reconcile count based on usage retrieved from the
   response.
-- **[M3]** Configurable estimation: allow opeartor to
+- **[M3]** Configurable estimation: allow operator to
   define how cost is estimated based on request
   metadata.
 - **[M4]** Token-type-aware accounting: a flexible way
@@ -65,11 +65,11 @@ estimation, what to do with unused tokens, etc.
   tracked separately with configurable weights so
   quotas reflect real cost differences.
 - **[M5]** Flexible bucket keys: quotas keyed by
-  request infromation. Headers, model identity, or
+  request information. Headers, model identity, or
   compound keys so different clients and models get
   independent budgets. (TBD - this one may need to be
   teased out more - possibly using CEL note there is an
-  upstream effor around  this found
+  upstream effort around this found
   [here](https://github.com/kubernetes-sigs/wg-ai-gateway/pull/57))
 - **[M6]** Hard deny with 429 when a budget is
   exhausted, with standard rate limit response headers
@@ -139,11 +139,11 @@ Three realities shape the requirements:
 
 1. **Precise token counts are only available after the
    response.** Providers are unaware of output token
-   counts before receiving the output. And are thefore
+   counts before receiving the output and are therefore
    forced to report usage in the response body or
    headers. By the time actual counts are known, the
    tokens have been consumed. Admission decisions
-   however must happen at requrest time. And therfore
+   however must happen at request time, and therefore
    we must rely on token count estimates, with
    reconciliation after the fact. This is why a
    reservation-based model is necessary rather than
