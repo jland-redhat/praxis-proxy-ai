@@ -3,7 +3,7 @@
 
 # `llmisvc_model_provider_resolver`
 
-Ports the `LLMISvc` / `KServe` BBR body-rewrite branch from IPP's `model-provider-resolver`.
+Rewrites publisher-ID body `model` values to the short model name for `LLMISvc` / `KServe` routing; the routing header is left unchanged.
 
 ## Configuration Notes
 

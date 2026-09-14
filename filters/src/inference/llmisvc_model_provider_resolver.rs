@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! `LLMISvc` model-provider resolver: rewrites `KServe` publisher-ID body
-//! `model` values to the short model name while leaving the routing
-//! header untouched.
+//! `LLMISvc` model-provider resolver: rewrites publisher-ID body `model`
+//! values to the short model name for `LLMISvc` / `KServe` routing while
+//! leaving the routing header unchanged.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -67,8 +67,8 @@ fn default_max_body_bytes() -> usize {
 // LlmisvcModelProviderResolverFilter
 // -----------------------------------------------------------------------------
 
-/// Ports the `LLMISvc` / `KServe` BBR body-rewrite branch from IPP's
-/// `model-provider-resolver`.
+/// Rewrites publisher-ID body `model` values to the short model name for
+/// `LLMISvc` / `KServe` routing; the routing header is left unchanged.
 ///
 /// Reads the model name from the configured request header (default
 /// `X-Model`, typically set by an earlier `model_to_header`). When that
@@ -166,7 +166,7 @@ impl LlmisvcModelProviderResolverFilter {
                     debug!(
                         original = %model_name,
                         rewritten = %short_name,
-                        "LLMISvc BBR: rewrote body model field"
+                        "LLMISvc: rewrote body model field for publisher ID"
                     );
                 }
             },
@@ -293,8 +293,8 @@ fn header_model_name(ctx: &HttpFilterContext<'_>, header: &HeaderName) -> Option
 
 /// Extract the short model name from a `KServe` publisher ID.
 ///
-/// Mirrors IPP: require `publishers/` prefix, then take the segment
-/// after the first `/models/` when non-empty.
+/// Require `publishers/` prefix, then take the segment after the first
+/// `/models/` when non-empty.
 fn llmisvc_short_model_name(model_name: &str) -> Option<&str> {
     if !model_name.starts_with(PUBLISHERS_PREFIX) {
         return None;

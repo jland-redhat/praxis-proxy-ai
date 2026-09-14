@@ -3,11 +3,9 @@
 # Build:
 #   cargo build -p praxis-ai-proxy
 #
-# Ports the LLMISvc / KServe BBR body-rewrite path: when the model
-# name is a publisher ID (`publishers/{ns}/models/{name}`), rewrite
-# the JSON body `"model"` field to `{name}` so vLLM receives the
-# short name. The routing header (default `X-Model`) is left
-# unchanged so KServe can still route on the publisher ID.
+# Rewrites publisher-ID body `model` values to the short model name for
+# LLMISvc / KServe routing; the routing header (default `X-Model`) is
+# left unchanged so routing can still use the publisher ID.
 #
 # Typical chain: `model_to_header` promotes the body model to
 # `X-Model`, then `llmisvc_model_provider_resolver` strips the
