@@ -151,53 +151,26 @@ impl LlmisvcModelProviderResolverFilter {
         ctx: &mut HttpFilterContext<'_>,
         body: &mut Option<Bytes>,
     ) -> Result<FilterAction, FilterError> {
-        // Require the routing header (usually from `model_to_header`);
-        // missing header means no-op.
         let Some(model_name) = header_model_name(ctx, &self.header) else {
             return Ok(FilterAction::Continue);
         };
-
         let Some(short_name) = llmisvc_short_model_name(&model_name) else {
             return Ok(FilterAction::Continue);
         };
 
-        let Some(raw) = body.as_ref() else {
-            return Ok(FilterAction::Continue);
-        };
-
-        let mut value: serde_json::Value = match serde_json::from_slice(raw) {
-            Ok(v) => v,
-            Err(_) => return Ok(FilterAction::Continue),
-        };
-
-        let Some(obj) = value.as_object_mut() else {
-            return Ok(FilterAction::Continue);
-        };
-
-        // Only rewrite an existing body field -- never invent `"model"`
-        // when the publisher ID came solely from the routing header.
-        if !obj.contains_key("model") {
-            return Ok(FilterAction::Continue);
+        match rewrite_publisher_body_model(body, short_name, self.name())? {
+            PublisherBodyRewrite::Noop => {},
+            PublisherBodyRewrite::Matched { rewritten } => {
+                ctx.set_metadata(META_PUBLISHER_ID, model_name.as_str());
+                if rewritten {
+                    debug!(
+                        original = %model_name,
+                        rewritten = %short_name,
+                        "LLMISvc BBR: rewrote body model field"
+                    );
+                }
+            },
         }
-
-        // Stash the original publisher ID for later metering.
-        ctx.set_metadata(META_PUBLISHER_ID, model_name.as_str());
-
-        if obj.get("model").and_then(serde_json::Value::as_str) == Some(short_name) {
-            return Ok(FilterAction::Continue);
-        }
-
-        obj.insert("model".to_owned(), serde_json::Value::String(short_name.to_owned()));
-
-        replace_json_body(body, &value, self.name(), "model").map_err(|e| -> FilterError {
-            format!("{}: failed to re-serialize rewritten request body: {e}", self.name()).into()
-        })?;
-
-        debug!(
-            original = %model_name,
-            rewritten = %short_name,
-            "LLMISvc BBR: rewrote body model field"
-        );
 
         Ok(FilterAction::Continue)
     }
@@ -241,6 +214,54 @@ impl HttpFilter for LlmisvcModelProviderResolverFilter {
 // Private Utilities
 // -----------------------------------------------------------------------------
 
+/// Result of attempting to rewrite a publisher-ID body `"model"` field.
+enum PublisherBodyRewrite {
+    /// Body was not a JSON object with a `"model"` field.
+    Noop,
+    /// Body `"model"` matched the publisher ID; `rewritten` is `false`
+    /// when the short name was already present.
+    Matched {
+        /// Whether the serialized body was updated.
+        rewritten: bool,
+    },
+}
+
+/// Rewrite an existing body `"model"` field to `short_name` when present.
+fn rewrite_publisher_body_model(
+    body: &mut Option<Bytes>,
+    short_name: &str,
+    filter_name: &'static str,
+) -> Result<PublisherBodyRewrite, FilterError> {
+    let Some(raw) = body.as_ref() else {
+        return Ok(PublisherBodyRewrite::Noop);
+    };
+
+    let mut value: serde_json::Value = match serde_json::from_slice(raw) {
+        Ok(v) => v,
+        Err(_) => return Ok(PublisherBodyRewrite::Noop),
+    };
+
+    let Some(obj) = value.as_object_mut() else {
+        return Ok(PublisherBodyRewrite::Noop);
+    };
+
+    if !obj.contains_key("model") {
+        return Ok(PublisherBodyRewrite::Noop);
+    }
+
+    if obj.get("model").and_then(serde_json::Value::as_str) == Some(short_name) {
+        return Ok(PublisherBodyRewrite::Matched { rewritten: false });
+    }
+
+    obj.insert("model".to_owned(), serde_json::Value::String(short_name.to_owned()));
+
+    replace_json_body(body, &value, filter_name, "model").map_err(|e| -> FilterError {
+        format!("{filter_name}: failed to re-serialize rewritten request body: {e}").into()
+    })?;
+
+    Ok(PublisherBodyRewrite::Matched { rewritten: true })
+}
+
 /// Read a non-empty model name from the request headers or pending
 /// mutations (e.g. `extra_request_headers` from an earlier
 /// `model_to_header`).
@@ -251,6 +272,13 @@ fn header_model_name(ctx: &HttpFilterContext<'_>, header: &HeaderName) -> Option
         let s = s.trim();
         if !s.is_empty() {
             return Some(s.to_owned());
+        }
+    }
+
+    if let Ok(Some(value)) = ctx.resolve_trusted_header(header) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
         }
     }
 
@@ -341,6 +369,33 @@ mod tests {
                 "zero max_body_bytes should be rejected: {err}"
             ),
             Ok(_) => panic!("zero max_body_bytes should be rejected"),
+        }
+    }
+
+    #[test]
+    fn from_config_rejects_unknown_fields() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+header: "X-Model"
+bogus_field: true
+"#,
+        )
+        .unwrap();
+        assert!(
+            LlmisvcModelProviderResolverFilter::from_config(&yaml).is_err(),
+            "unknown fields should be rejected"
+        );
+    }
+
+    #[test]
+    fn from_config_rejects_invalid_header_name() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str("header: \"@\"").unwrap();
+        match LlmisvcModelProviderResolverFilter::from_config(&yaml) {
+            Err(err) => assert!(
+                err.to_string().contains("header"),
+                "invalid header name should be rejected: {err}"
+            ),
+            Ok(_) => panic!("invalid header name should be rejected"),
         }
     }
 
@@ -469,6 +524,31 @@ mod tests {
             ctx.filter_metadata.get(META_PUBLISHER_ID).map(String::as_str),
             Some("publishers/ns/models/from-header"),
         );
+    }
+
+    #[tokio::test]
+    async fn composes_with_model_to_header_at_end_of_stream() {
+        use crate::inference::ModelToHeaderFilter;
+
+        let model_to_header = ModelToHeaderFilter::from_config(&serde_yaml::Value::Null).unwrap();
+        let llmisvc = filter_default();
+        let req = crate::test_utils::make_request(http::Method::POST, "/v1/chat/completions");
+        let mut ctx = crate::test_utils::make_filter_context(&req);
+
+        let json = br#"{"model":"publishers/rhoai/models/granite-3.1-8b","messages":[]}"#;
+        let mut body = Some(Bytes::from_static(json));
+
+        let action = model_to_header
+            .on_request_body(&mut ctx, &mut body, true)
+            .await
+            .unwrap();
+        assert!(matches!(action, FilterAction::BodyDone));
+
+        let action = llmisvc.on_request_body(&mut ctx, &mut body, true).await.unwrap();
+        assert!(matches!(action, FilterAction::Continue));
+
+        let parsed: serde_json::Value = serde_json::from_slice(body.as_ref().unwrap()).unwrap();
+        assert_eq!(parsed["model"].as_str(), Some("granite-3.1-8b"));
     }
 
     #[tokio::test]
